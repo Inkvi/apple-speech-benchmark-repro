@@ -6,42 +6,38 @@ An independent reproduction of Inscribe's benchmark
 legacy `SFSpeechRecognizer` and several Whisper models on LibriSpeech.
 
 The original is a good, unusually transparent benchmark: it publishes its raw
-per-utterance transcripts. This repo re-scores those transcripts, independently
-re-runs every engine on the real audio (including Apple SpeechAnalyzer via a small
-macOS 26 Swift harness), adds the engine the original left out (NVIDIA Parakeet),
-puts 95% confidence intervals on every number, and extends the test out of domain
-(Earnings-22, AMI). Every number here is reproducible with the scripts in this repo,
-and the raw hypotheses we generated are committed under `results/transcripts/`.
+per-utterance transcripts. This repo re-scores those transcripts and re-runs every engine
+on the real audio, including Apple SpeechAnalyzer through a small macOS 26 Swift harness.
+It also adds the engine the original left out (NVIDIA Parakeet), puts 95% confidence
+intervals on every number, and extends the test to two out-of-domain sets (Earnings-22
+and AMI). Every number is reproducible with the scripts here, and the raw transcripts our
+runs produced are committed under `results/transcripts/`.
 
 ## TL;DR
 
-- **On LibriSpeech, Inscribe's headline holds only within noise.** Apple SpeechAnalyzer
-  (1.82% WER) and Whisper large-v3 (1.82%) are a dead tie, and Parakeet v2 (1.69%) edges
-  them by about 0.1pp. A paired bootstrap puts Apple and Whisper large-v3 level and
-  Parakeet v2 only 0.01 to 0.25pp ahead. "Most accurate on-device engine" is inside the
-  noise, not a clean win.
-- **The benchmark's real gap is Parakeet.** NVIDIA Parakeet TDT (which the original did
-  not test) is tied for best on LibriSpeech and the strongest on-device engine on the
-  fair out-of-domain set (Earnings-22, ~11.2%, on par with reference Whisper), so it
-  belongs in any on-device comparison.
-- **Out of domain, Apple is competitive but not ahead.** On Earnings-22 a paired test
-  puts Apple (12.03%) 0.5 to 1.2pp behind both Parakeet models, and level with on-device
-  WhisperKit turbo (12.35%). Reference-implementation Whisper scores ~11.1% (turbo, Open
-  ASR Leaderboard), on par with Parakeet, so Apple trails the leaders here.
-- **Two caveats decide how to read this.** (1) LibriSpeech and AMI are both in
-  Parakeet's training data; Earnings-22 is the only set here not listed in any engine's
-  training data (Apple discloses nothing, so that is as fair as public info allows). (2)
-  Whisper decoded clip-by-clip hallucinates on short conversational clips (AMI is 38%
-  sub-1s) in both WhisperKit and reference mlx-whisper, inflating its AMI WER far above
-  the leaderboard's long-form ~15%, so we flag the AMI Whisper numbers as a decoding
-  artifact, not Whisper's true error.
+Numbers are WER (word error rate): the share of words the engine got wrong, so lower is
+better. "pp" means percentage points.
 
-WER is word error rate, lower is better. Every WER below is corpus WER (total word
-edits / total reference words) with a 95% bootstrap confidence interval (CI) over
-utterances. Overlapping marginal CIs are a weak signal, so where the ranking is close we
-also run a paired bootstrap (`paired_test.py`) that resamples the same utterances and
-takes the per-resample difference; it cancels shared clip difficulty and is the right
-test for "is A really better than B."
+- **On LibriSpeech, Inscribe's headline holds only within noise.** Apple SpeechAnalyzer
+  (1.82%) and Whisper large-v3 (1.82%) tie, and Parakeet v2 (1.69%) edges both by just
+  0.01 to 0.25pp on a paired test. "Most accurate on-device engine" is inside the noise,
+  not a clean win.
+- **The original benchmark's big omission is Parakeet.** NVIDIA Parakeet TDT (untested by
+  the original) ties for best on LibriSpeech and is the strongest on-device engine on the
+  fair out-of-domain set (Earnings-22, ~11.2%). It belongs in any on-device comparison.
+- **Out of domain, Apple is competitive but not ahead.** On Earnings-22, Apple (12.03%)
+  lands 0.5 to 1.2pp behind both Parakeet models and level with on-device Whisper turbo
+  (12.35%). Reference Whisper (the original PyTorch build) scores ~11.1%, on par with
+  Parakeet, so Apple trails the leaders.
+- **Two caveats.** LibriSpeech and AMI are both in Parakeet's training data; Earnings-22
+  is the only set no engine trained on, so it is the fairest test. And Whisper's AMI
+  numbers are a decoding artifact of running it clip-by-clip on very short segments, not
+  its real accuracy (see "The AMI Whisper numbers").
+
+Every WER below is corpus WER (total word errors / total reference words) with a 95%
+bootstrap confidence interval. When a ranking is close, overlapping intervals are a weak
+signal, so we also run a paired bootstrap (`paired_test.py`): it compares two engines on
+the same clips and is the right test for "is A really better than B."
 
 ## What we found
 
@@ -70,11 +66,11 @@ engines overlap. Colored by training exposure.](assets/librispeech.png)
 ### Out of domain: does the ranking hold?
 
 Two harder sets from the Open ASR Leaderboard bundle, run end to end with the same
-normalizer and corpus WER. **Earnings-22 is not in any engine's training data (the fair
-test; Apple is undisclosed, so this is as fair as public info allows). AMI is in
-Parakeet's training set**, so Parakeet has home-field there.
+normalizer and corpus WER. **Earnings-22 is in no engine's training data (the fairest
+test; Apple discloses nothing). AMI is in Parakeet's training set**, so Parakeet has
+home-field there.
 
-| Engine | LibriSpeech | Earnings-22 (fair, OOD for all) | AMI (Parakeet in-domain) |
+| Engine | LibriSpeech | Earnings-22 (out-of-domain, fair) | AMI (Parakeet in-domain) |
 |--------|------------:|:-------------------------------:|:------------------------:|
 | Parakeet v2            | 1.69 | 11.23 (10.73-11.73) | 11.58 (11.23-11.93) |
 | Parakeet v3            | 2.15 | 11.20 (10.71-11.74) | 11.43 (11.08-11.79) |
@@ -91,21 +87,18 @@ and ~14.9 (large-v3).
 out-of-domain for all) and AMI (in Parakeet's training). Parakeet leads both; Apple is
 mid-pack; the AMI Whisper bars are hatched to mark the clip-level Whisper decoding artifact.](assets/out-of-domain.png)
 
-Reading it:
+How to read this:
 
-- **On Earnings-22, the fair set, Parakeet is the best on-device engine.** A paired
-  bootstrap over the same utterances puts Apple 0.5 to 1.2pp behind both Parakeet models
-  (significant), and level with on-device WhisperKit turbo (difference -0.8 to +0.1pp,
-  spanning zero). Reference Whisper on the Open ASR Leaderboard scores ~11.1% (turbo), on
-  par with Parakeet, so Apple sits behind Parakeet and reference Whisper here, not ahead.
-  Comparing the marginal CIs alone would miscall Apple vs Parakeet a tie; the paired test
-  separates them (`paired_test.py`).
+- **On Earnings-22, the fair set, Parakeet is the best on-device engine.** A paired test
+  over the same clips puts Apple 0.5 to 1.2pp behind both Parakeet models, and level with
+  on-device Whisper turbo. Reference Whisper scores ~11.1% (turbo), on par with Parakeet.
+  So Apple sits behind Parakeet and reference Whisper here, not ahead. Parakeet leads even
+  though Earnings-22 is not in its training data, so the edge is real, and it is exactly
+  the engine the original benchmark missed. (Comparing the marginal CIs alone would
+  miscall Apple vs Parakeet a tie; the paired test separates them.)
 - **On AMI, Parakeet leads** (~11.5% vs Apple's 14.3%), but AMI is in Parakeet's training
-  set, so part of that gap is domain overlap, not pure skill. Ignore the raw AMI Whisper
+  set, so part of that gap is home advantage, not pure skill. Ignore the raw AMI Whisper
   cells (see below).
-- **Parakeet leads even on Earnings-22, where it has no home-field advantage**, so its
-  edge is real and not only training overlap. That is the finding the original benchmark
-  missed by not testing it.
 
 ### The AMI Whisper numbers (a clip-level decoding artifact, not the model's accuracy)
 
@@ -123,16 +116,16 @@ Apple:      It's a nice machine that goes.
 
 This is not specific to WhisperKit. We ran the check (`mlx_ami_control.py`): reference-style
 `mlx-whisper` (which applies Whisper's temperature-fallback and compression-ratio /
-no-speech thresholds) on the same clips is if anything more erratic, looping on some of
+no-speech thresholds) on the same clips is, if anything, more erratic. It loops on some of
 them (reference "Something else." came back as "get get get get get..."), so its sample WER
 swings to ~73% with a very wide interval. Apple and Parakeet do not hallucinate on these
-clips at all. So the AMI Whisper gap is a property of decoding Whisper on very short
-isolated segments, not a WhisperKit bug and not Whisper's underlying accuracy; the
-leaderboard's ~15% comes from a long-form decoding pipeline we do not replicate. We keep
-the raw numbers in the table for transparency, treat the leaderboard figure as the fair
+clips at all. So the AMI Whisper gap comes from decoding Whisper on very short isolated
+segments, not from a WhisperKit bug and not from Whisper's underlying accuracy; the
+leaderboard's ~15% uses a long-form decoding pipeline we do not replicate. We keep the raw
+numbers in the table for transparency, treat the leaderboard figure as the fair
 Whisper-on-AMI reading, and draw no Apple-vs-Whisper conclusion on AMI. On Earnings-22 the
-effect is small (longer clips): our WhisperKit turbo 12.35 sits just above the
-leaderboard's 11.07.
+effect is small, because its clips are longer: our WhisperKit turbo 12.35 sits just above
+the leaderboard's 11.07.
 
 ### Training-data overlap (read before ranking)
 
@@ -150,14 +143,14 @@ are not apples-to-apples:
 - **Apple SpeechAnalyzer: undisclosed.** Apple publishes nothing about training data,
   so whether LibriSpeech or AMI was seen is unknown.
 
-Net: LibriSpeech and AMI favor the LibriSpeech/AMI-trained models (Parakeet).
+In short: LibriSpeech and AMI favor the LibriSpeech/AMI-trained models (Parakeet).
 Earnings-22 is the only set here not listed in any engine's training data, so it is the
 fairest read of general capability (with the caveat that Apple discloses nothing).
 
-## Cross-checks against published numbers
+## Sanity checks against published numbers
 
-Our self-measured numbers line up with independently published figures, which is the
-main check that the harness and scoring are sound.
+Our self-measured numbers line up with independently published figures, which is the main
+check that the harness and scoring are sound.
 
 | Engine / set | This repo | Published | Source |
 |--------------|----------:|----------:|--------|
@@ -166,29 +159,27 @@ main check that the harness and scoring are sound.
 | Parakeet v2, AMI               | 11.58 | 11.16 | NVIDIA model card |
 | Parakeet v3, Earnings-22       | 11.20 | 11.42 | NVIDIA model card |
 
-Parakeet v2 on LibriSpeech reproduces NVIDIA's card to the hundredth (1.69 vs 1.69),
-and Earnings-22 lands within the confidence interval (11.23 vs 11.15). AMI runs a bit
-higher than the card (11.58 vs 11.16); the card's AMI figure uses the leaderboard's
-"cleaned" reference variant, ours uses the bundle's standard references, which is the
-expected direction for that difference.
+Parakeet v2 on LibriSpeech reproduces NVIDIA's card to the hundredth (1.69 vs 1.69), and
+Earnings-22 lands within the confidence interval (11.23 vs 11.15). AMI runs a bit higher
+than the card (11.58 vs 11.16); the card scores AMI on the leaderboard's "cleaned"
+references and we use the bundle's standard ones, which explains why ours runs slightly
+higher.
 
-Whisper is run here through **WhisperKit CoreML** (the on-device path Inscribe used),
-not the reference PyTorch implementation the Open ASR Leaderboard scores, so absolute
-Whisper numbers differ from the leaderboard's by implementation and quantization. For
-context, the leaderboard (read 2026-07-15) reports Whisper large-v3-turbo at 11.07
-(Earnings-22) and 13.87 cleaned / 15.16 original (AMI); large-v3 at 11.59 and
-13.63 / 14.86.
-
-## Verifying our Whisper harness
-
-Our small-model WhisperKit numbers land on OpenAI's published zero-shot LibriSpeech
-figures, which validates the harness end to end:
+Our small Whisper models also match OpenAI's published zero-shot LibriSpeech figures,
+which checks the WhisperKit harness end to end:
 
 | Model | This repo | OpenAI published |
 |-------|----------:|-----------------:|
 | Whisper tiny  | 7.47 | 7.6 |
 | Whisper base  | 5.01 | 5.0 |
 | Whisper small | 3.32 | 3.4 |
+
+One caveat for every Whisper number here: we run Whisper through **WhisperKit CoreML** (the
+on-device path Inscribe used), not the reference PyTorch build the Open ASR Leaderboard
+scores, so our absolute Whisper numbers differ from the leaderboard's by implementation and
+quantization. For context, the leaderboard (read 2026-07-15) reports Whisper
+large-v3-turbo at 11.07 (Earnings-22) and 13.87 cleaned / 15.16 original (AMI), and
+large-v3 at 11.59 and 13.63 / 14.86.
 
 ## Re-scoring Inscribe's published transcripts
 
@@ -204,10 +195,10 @@ WER from those with OpenAI's normalizer (no audio needed, `rescore_published.py`
 
 The consistent negative delta is the normalizer, not a scoring error: Inscribe's
 normalizer is slightly stricter than OpenAI's stock one (they disclose this), so every
-engine shifts by a similar amount (0.29-0.45pp) and the ranking is unchanged. Our own
-independent Apple run (1.82% on test-clean above) matches this re-score of their
-published transcripts (1.83%), which is strong evidence their Apple transcripts are
-genuine engine output, not just honest scoring.
+engine shifts by a similar amount (0.29-0.45pp) and the ranking is unchanged. Better still,
+our own independent Apple run (1.82% on test-clean above) matches this re-score of their
+published transcripts (1.83%), which confirms their published transcripts are real engine
+output, not only that their scoring was sound.
 
 ## Environment
 
