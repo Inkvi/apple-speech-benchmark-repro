@@ -34,12 +34,16 @@ def main():
         sys.exit("usage: python prep_ood_dataset.py <config> [--limit N] [text_col]")
     cfg = sys.argv[1]
     limit = None
+    min_dur = 0.0  # AMI uses --min-dur 0.15 (WhisperKit CLI can't handle sub-0.15s clips)
     text_col = "text"
     rest = sys.argv[2:]
     i = 0
     while i < len(rest):
         if rest[i] == "--limit":
             limit = int(rest[i + 1])
+            i += 2
+        elif rest[i] == "--min-dur":
+            min_dur = float(rest[i + 1])
             i += 2
         else:
             text_col = rest[i]
@@ -71,6 +75,8 @@ def main():
                 arr, sr = sf.read(io.BytesIO(raw), dtype="float32")
                 if arr.ndim > 1:
                     arr = arr.mean(axis=1)
+                if min_dur and len(arr) / sr < min_dur:
+                    continue  # too short for the WhisperKit CLI; dropped for all engines
                 uid = f"{cfg}_{gi:06d}"
                 sf.write(f"{audio_dir}/{uid}.wav", arr, sr, subtype="PCM_16")
                 refs[uid] = tx
