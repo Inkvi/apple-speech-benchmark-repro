@@ -46,11 +46,14 @@ def audio_seconds(paths) -> float:
 
 
 def main():
+    import gzip
     from parakeet_mlx import from_pretrained
-    from normalize_wer import tokens, edit_distance
+    from normalize_wer import score_pairs, bootstrap_ci
 
     variants = sys.argv[1:] or ["v2", "v3"]
     os.makedirs(os.path.dirname(RESULTS), exist_ok=True)
+    tdir = os.path.join(ROOT, "results", "transcripts")
+    os.makedirs(tdir, exist_ok=True)
     refs = load_references()
     paths = {p.split("/")[-1][:-5]: p
              for p in glob.glob(os.path.join(LIBRI, "**", "*.flac"), recursive=True)}
@@ -59,25 +62,27 @@ def main():
     for v in variants:
         repo = REPO[v]
         model = from_pretrained(repo)
-        errors = ref_words = 0
+        hyps = {}
         compute = 0.0
-        for uid, ref in refs.items():
+        for uid in refs:
             t = time.time()
-            hyp = model.transcribe(paths[uid]).text
+            hyps[uid] = model.transcribe(paths[uid]).text
             compute += time.time() - t
-            r, h = tokens(ref), tokens(hyp)
-            errors += edit_distance(r, h)
-            ref_words += len(r)
+        wer, errors, ref_words, counts = score_pairs([(refs[uid], hyps[uid]) for uid in refs])
+        lo, hi = bootstrap_ci(counts)
+        engine = f"parakeet-tdt-0.6b-{v}"
         res = {
-            "engine": f"parakeet-tdt-0.6b-{v}", "split": "test-clean",
-            "werPercent": round(100 * errors / ref_words, 2),
+            "engine": engine, "split": "test-clean",
+            "werPercent": round(wer, 2), "ci95": [lo, hi],
             "audioSeconds": round(total_audio), "computeSeconds": round(compute),
             "realTimeFactor": round(compute / total_audio, 4),
         }
         allr = json.load(open(RESULTS)) if os.path.exists(RESULTS) else []
         allr = [x for x in allr if x["engine"] != res["engine"]] + [res]
         json.dump(allr, open(RESULTS, "w"), indent=2)
-        print(f"DONE {res['engine']}: WER {res['werPercent']}%  "
+        with gzip.open(os.path.join(tdir, f"librispeech-{engine}.json.gz"), "wt") as fh:
+            json.dump(hyps, fh)
+        print(f"DONE {engine}: WER {res['werPercent']}% (95% CI {lo}-{hi})  "
               f"RTF {res['realTimeFactor']}", flush=True)
 
 

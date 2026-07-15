@@ -1,90 +1,125 @@
-"""Run every engine on a prepared out-of-domain sample and score with corpus WER.
+"""Run every engine on a prepared out-of-domain test set and save raw transcripts.
+
+This only produces transcripts (the raw artifact). Scoring, confidence intervals,
+and the summary table are done separately by score_ood.py, so you can re-score or
+add confidence intervals without re-running the engines.
 
 Expects data_<config>/audio/*.wav + data_<config>/refs.json (see prep_ood_dataset.py),
 the WhisperKit CLI built under WhisperKit/, and the SpeechAnalyzer harness built under
 SpeechAnalyzerCLI/. Parakeet runs via parakeet-mlx.
 
     python run_ood_engines.py earnings22
+    python run_ood_engines.py earnings22 apple whisper-large-v3-v20240930   # subset
 
-Writes results_<config>.json.
+Writes results/reports/<config>/<engine>/<uid>.json (each {"text": ...}) plus a
+_meta.json per engine with wall time and missing count. Then run score_ood.py.
 """
 import glob
 import json
 import os
 import subprocess
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
-WHISPER_MODELS = ["whisper-small", "whisper-large-v3-v20240930"]  # small + turbo, by name
+WHISPER_MODELS = ["whisper-small", "whisper-large-v3-v20240930"]  # small + turbo
 PARAKEET = [("parakeet-v2", "mlx-community/parakeet-tdt-0.6b-v2"),
             ("parakeet-v3", "mlx-community/parakeet-tdt-0.6b-v3")]
 
 
+def audio_seconds(wavs) -> float:
+    import soundfile as sf
+    total = 0.0
+    for p in wavs:
+        info = sf.info(p)
+        total += info.frames / info.samplerate
+    return total
+
+
 def main():
-    from normalize_wer import tokens, edit_distance
-
     cfg = sys.argv[1]
-    audio = f"{ROOT}/data_{cfg}/audio"
-    refs = json.load(open(f"{ROOT}/data_{cfg}/refs.json"))
-    results_path = f"{ROOT}/results_{cfg}.json"
-    sacli = f"{ROOT}/SpeechAnalyzerCLI/.build/release/sacli"
+    only = set(sys.argv[2:])  # optional engine allowlist
+    audio = f"{ROOT}/data_{cfg}"
+    assert os.path.isdir(f"{audio}/audio"), f"run prep_ood_dataset.py {cfg} first"
+    refs = json.load(open(f"{audio}/refs.json"))
+    wavs = [f"{audio}/audio/{uid}.wav" for uid in refs]
+    total_audio = audio_seconds(wavs)
+    reports = f"{ROOT}/results/reports/{cfg}"
 
-    def score(get):
-        errs = words = miss = 0
-        for uid, ref in refs.items():
-            h = get(uid)
-            if h is None:
-                miss += 1
-                h = ""
-            r, hy = tokens(ref), tokens(h)
-            errs += edit_distance(r, hy)
-            words += len(r)
-        return round(100 * errs / words, 2), miss
+    def want(name):
+        return not only or name in only
 
-    def save(rec):
-        allr = json.load(open(results_path)) if os.path.exists(results_path) else []
-        allr = [x for x in allr if x["engine"] != rec["engine"]] + [rec]
-        json.dump(allr, open(results_path, "w"), indent=2)
-
-    def report_getter(rdir):
-        return lambda uid: (json.load(open(f"{rdir}/{uid}.json")).get("text")
-                            if os.path.exists(f"{rdir}/{uid}.json") else None)
+    def meta(engine, compute_s, wall_s, missing):
+        d = f"{reports}/{engine}"
+        os.makedirs(d, exist_ok=True)
+        json.dump({"audioSeconds": round(total_audio), "computeSeconds": round(compute_s),
+                   "wallSeconds": round(wall_s), "missing": missing},
+                  open(f"{d}/_meta.json", "w"), indent=2)
+        print(f"{engine}: {len(refs) - missing}/{len(refs)} transcribed, "
+              f"wall={round(wall_s)}s", flush=True)
 
     # Apple SpeechAnalyzer
-    if os.path.exists(sacli):
-        ad = f"{ROOT}/results/reports/{cfg}/apple"
+    sacli = f"{ROOT}/SpeechAnalyzerCLI/.build/release/sacli"
+    if want("apple") and os.path.exists(sacli):
+        ad = f"{reports}/apple-speechanalyzer"
         os.makedirs(ad, exist_ok=True)
-        subprocess.run([sacli, "--audio-folder", audio, "--out", ad],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        wer, miss = score(report_getter(ad))
-        save({"engine": "apple-speechanalyzer", "werPercent": wer, "missing": miss})
-        print(f"apple-speechanalyzer: {wer}%", flush=True)
+        t0 = time.time()
+        p = subprocess.run([sacli, "--audio-folder", f"{audio}/audio", "--out", ad],
+                           stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True)
+        wall = time.time() - t0
+        if p.returncode != 0:
+            print(f"!!! apple FAILED: {p.stderr[-300:]}", flush=True)
+        else:
+            miss = sum(0 if os.path.exists(f"{ad}/{u}.json") else 1 for u in refs)
+            meta("apple-speechanalyzer", wall, wall, miss)
+    elif want("apple"):
+        print("skip apple: build SpeechAnalyzerCLI first (macOS 26+)", flush=True)
 
-    # WhisperKit
+    # WhisperKit (report writes <uid>.json with text + timings)
     for model in WHISPER_MODELS:
-        rdir = f"{ROOT}/results/reports/{cfg}/{model}"
+        if not want(model):
+            continue
+        rdir = f"{reports}/{model}"
         os.makedirs(rdir, exist_ok=True)
+        t0 = time.time()
         p = subprocess.run(
             ["swift", "run", "-c", "release", "whisperkit-cli", "transcribe",
-             "--audio-folder", audio, "--model", model, "--language", "en",
+             "--audio-folder", f"{audio}/audio", "--model", model, "--language", "en",
              "--chunking-strategy", "none", "--report", "--report-path", rdir],
             cwd=f"{ROOT}/WhisperKit", stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        wall = time.time() - t0
         if p.returncode != 0:
-            print(f"!!! {model} FAILED: {p.stderr[-150:]}", flush=True)
+            print(f"!!! {model} FAILED: {p.stderr[-300:]}", flush=True)
             continue
-        wer, miss = score(report_getter(rdir))
-        save({"engine": model, "werPercent": wer, "missing": miss})
-        print(f"{model}: {wer}%", flush=True)
+        compute = 0.0
+        miss = 0
+        for u in refs:
+            rf = f"{rdir}/{u}.json"
+            if os.path.exists(rf):
+                compute += json.load(open(rf)).get("timings", {}).get("fullPipeline", 0.0)
+            else:
+                miss += 1
+        meta(model, compute, wall, miss)
 
-    # Parakeet
-    from parakeet_mlx import from_pretrained
-    for name, repo in PARAKEET:
-        m = from_pretrained(repo)
-        hyp = {uid: m.transcribe(f"{audio}/{uid}.wav").text for uid in refs}
-        wer, miss = score(lambda uid: hyp.get(uid))
-        save({"engine": name, "werPercent": wer, "missing": miss})
-        print(f"{name}: {wer}%", flush=True)
+    # Parakeet (write per-utterance {"text": ...} ourselves)
+    if any(want(n) for n, _ in PARAKEET):
+        from parakeet_mlx import from_pretrained
+        for name, repo in PARAKEET:
+            if not want(name):
+                continue
+            rdir = f"{reports}/{name}"
+            os.makedirs(rdir, exist_ok=True)
+            m = from_pretrained(repo)
+            compute = 0.0
+            for uid in refs:
+                t = time.time()
+                text = m.transcribe(f"{audio}/audio/{uid}.wav").text
+                compute += time.time() - t
+                json.dump({"text": text}, open(f"{rdir}/{uid}.json", "w"))
+            meta(name, compute, compute, 0)
+
+    print("ALL DONE. Now: python score_ood.py", cfg, flush=True)
 
 
 if __name__ == "__main__":

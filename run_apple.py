@@ -32,8 +32,18 @@ def load_references() -> dict[str, str]:
     return refs
 
 
+def audio_seconds() -> float:
+    import soundfile as sf
+    total = 0.0
+    for p in glob.glob(os.path.join(LIBRI, "**", "*.flac"), recursive=True):
+        info = sf.info(p)
+        total += info.frames / info.samplerate
+    return total
+
+
 def main():
-    from normalize_wer import tokens, edit_distance
+    import gzip
+    from normalize_wer import score_pairs, bootstrap_ci
 
     assert os.path.exists(SACLI), f"build the harness first: (cd SpeechAnalyzerCLI && swift build -c release)"
     os.makedirs(OUT, exist_ok=True)
@@ -44,25 +54,33 @@ def main():
     subprocess.run([SACLI, "--audio-folder", FLAT, "--out", OUT], check=True)
     wall = time.time() - t0
 
-    errors = ref_words = missing = 0
-    audio_s = 0.0
-    for uid, ref in refs.items():
+    hyps = {}
+    missing = 0
+    for uid in refs:
         rf = os.path.join(OUT, f"{uid}.json")
-        hyp = json.load(open(rf)).get("text", "") if os.path.exists(rf) else ""
-        if not os.path.exists(rf):
+        if os.path.exists(rf):
+            hyps[uid] = json.load(open(rf)).get("text", "")
+        else:
+            hyps[uid] = ""
             missing += 1
-        r, h = tokens(ref), tokens(hyp)
-        errors += edit_distance(r, h)
-        ref_words += len(r)
-    # LibriSpeech test-clean is 19,452 s of audio; RTF = wall / audio (sacli is single-stream)
+
+    wer, errors, ref_words, counts = score_pairs([(refs[uid], hyps[uid]) for uid in refs])
+    lo, hi = bootstrap_ci(counts)
+    # sacli is single-stream, so wall time / measured audio seconds is a clean RTF.
+    audio_s = audio_seconds()
     res = {
         "engine": "apple-speechanalyzer", "split": "test-clean",
-        "werPercent": round(100 * errors / ref_words, 2),
+        "werPercent": round(wer, 2), "ci95": [lo, hi],
         "missing": missing, "utterances": len(refs),
-        "wallSeconds": round(wall), "realTimeFactor": round(wall / 19452, 4),
+        "audioSeconds": round(audio_s), "wallSeconds": round(wall),
+        "realTimeFactor": round(wall / audio_s, 4) if audio_s else None,
     }
     json.dump(res, open(RESULTS, "w"), indent=2)
-    print(f"Apple SpeechAnalyzer test-clean: WER {res['werPercent']}%  "
+    tdir = os.path.join(ROOT, "results", "transcripts")
+    os.makedirs(tdir, exist_ok=True)
+    with gzip.open(os.path.join(tdir, "librispeech-apple-speechanalyzer.json.gz"), "wt") as fh:
+        json.dump(hyps, fh)
+    print(f"Apple SpeechAnalyzer test-clean: WER {res['werPercent']}% (95% CI {lo}-{hi})  "
           f"RTF {res['realTimeFactor']}  missing={missing}")
 
 

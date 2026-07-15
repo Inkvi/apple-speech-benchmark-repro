@@ -195,7 +195,13 @@ private struct SpeechAnalyzerCLI {
                 }
             }
             try await analysisTask.value
-            return segments.joined()
+            // Join final segments with a space. On short clips there is usually one
+            // final segment, so this matches earlier single-segment runs; on longer
+            // out-of-domain clips there can be several, and joining with "" would
+            // merge the last word of one segment into the first word of the next and
+            // inflate WER. The scorer normalizes whitespace, so an extra space is
+            // harmless while a missing one is not.
+            return segments.joined(separator: " ")
         } catch {
             analysisTask.cancel()
             throw CLIError.message("Failed to transcribe \(audioURL.path): \(error)")

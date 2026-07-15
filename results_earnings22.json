@@ -1,0 +1,66 @@
+{
+  "config": "earnings22",
+  "utterances": 2741,
+  "results": [
+    {
+      "engine": "parakeet-v3",
+      "werPercent": 11.2,
+      "ci95": [
+        10.71,
+        11.74
+      ],
+      "missing": 0,
+      "utterances": 2741,
+      "refWords": 48899,
+      "wallSeconds": 389
+    },
+    {
+      "engine": "parakeet-v2",
+      "werPercent": 11.23,
+      "ci95": [
+        10.73,
+        11.73
+      ],
+      "missing": 0,
+      "utterances": 2741,
+      "refWords": 48899,
+      "wallSeconds": 399
+    },
+    {
+      "engine": "apple-speechanalyzer",
+      "werPercent": 12.03,
+      "ci95": [
+        11.52,
+        12.56
+      ],
+      "missing": 0,
+      "utterances": 2741,
+      "refWords": 48899,
+      "wallSeconds": 368
+    },
+    {
+      "engine": "whisper-large-v3-v20240930",
+      "werPercent": 12.35,
+      "ci95": [
+        11.87,
+        12.86
+      ],
+      "missing": 0,
+      "utterances": 2741,
+      "refWords": 48899,
+      "wallSeconds": 2015
+    },
+    {
+      "engine": "whisper-small",
+      "werPercent": 14.92,
+      "ci95": [
+        14.27,
+        15.57
+      ],
+      "missing": 0,
+      "utterances": 2741,
+      "refWords": 48899,
+      "wallSeconds": 671
+    }
+  ]
+}

@@ -35,9 +35,49 @@ def corpus_wer(pairs) -> tuple[float, int, int]:
     An empty hypothesis scores as all-deletions (100% WER for that utterance),
     matching the benchmark's "failures counted, not hidden" rule.
     """
+    _wer, errors, ref_words, _counts = score_pairs(pairs)
+    return (_wer, errors, ref_words)
+
+
+def score_pairs(pairs):
+    """Like corpus_wer but also returns per-utterance (errors, ref_words) counts,
+    which the bootstrap uses to put a confidence interval on the corpus WER.
+
+    Returns (wer_percent, total_errors, total_reference_words, counts).
+    """
     errors = ref_words = 0
+    counts = []
     for ref, hyp in pairs:
         r, h = tokens(ref), tokens(hyp)
-        errors += edit_distance(r, h)
+        e = edit_distance(r, h)
+        counts.append((e, len(r)))
+        errors += e
         ref_words += len(r)
-    return (100.0 * errors / ref_words, errors, ref_words)
+    wer = 100.0 * errors / ref_words if ref_words else 0.0
+    return (wer, errors, ref_words, counts)
+
+
+def bootstrap_ci(counts, resamples: int = 1000, seed: int = 0):
+    """95% confidence interval for corpus WER by resampling utterances with
+    replacement. `counts` is the per-utterance (errors, ref_words) list from
+    score_pairs. Deterministic given the seed. Returns (low, high) in percent.
+
+    The interval says how much the corpus WER would wobble if we had drawn a
+    different sample of utterances of the same size, so ranks whose intervals
+    overlap should be read as ties rather than a real ordering.
+    """
+    import numpy as np
+
+    if not counts:
+        return (0.0, 0.0)
+    e = np.array([c[0] for c in counts], dtype=float)
+    w = np.array([c[1] for c in counts], dtype=float)
+    n = len(counts)
+    rng = np.random.default_rng(seed)
+    wers = np.empty(resamples)
+    for i in range(resamples):
+        idx = rng.integers(0, n, n)
+        denom = w[idx].sum()
+        wers[i] = 100.0 * e[idx].sum() / denom if denom else 0.0
+    lo, hi = np.percentile(wers, [2.5, 97.5])
+    return (round(float(lo), 2), round(float(hi), 2))

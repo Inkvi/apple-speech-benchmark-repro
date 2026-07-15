@@ -2,209 +2,267 @@
 
 An independent reproduction of Inscribe's benchmark
 ["Apple's New Speech API vs Whisper"](https://get-inscribe.com/blog/apple-speech-api-benchmark.html)
-(2026-07-13), which measured Apple's new on-device `SpeechAnalyzer` API against
-the legacy `SFSpeechRecognizer` and several Whisper models on LibriSpeech.
+(2026-07-13), which measured Apple's new on-device `SpeechAnalyzer` API against the
+legacy `SFSpeechRecognizer` and several Whisper models on LibriSpeech.
 
-The original is a solid, unusually honest benchmark (it publishes its raw
-transcripts). This repo re-scores it, independently re-runs every engine on the
-real audio (including Apple SpeechAnalyzer via a small macOS 26 harness), adds the
-engine it left out (NVIDIA Parakeet), and documents a contamination caveat that
-changes how the numbers should be read: LibriSpeech is in Parakeet's training set
-but held out by Whisper, so it is not an apples-to-apples comparison.
+The original is a good, unusually transparent benchmark: it publishes its raw
+per-utterance transcripts. This repo re-scores those transcripts, independently
+re-runs every engine on the real audio (including Apple SpeechAnalyzer via a small
+macOS 26 Swift harness), adds the engine the original left out (NVIDIA Parakeet),
+puts 95% confidence intervals on every number, and extends the test out of domain
+(Earnings-22, AMI). Every number here is reproducible with the scripts in this repo,
+and the raw hypotheses we generated are committed under `results/transcripts/`.
 
-## What you can reproduce
+## TL;DR
 
-**1. Re-score their published Apple transcripts (no audio, ~1 minute).**
-Inscribe released every per-utterance transcript for both Apple engines. Each
-record has the LibriSpeech `reference` and the engine `hypothesis`, so you can
-recompute WER from scratch and check it against their `summary.json`.
+- **On LibriSpeech, Inscribe's headline holds only within noise.** Apple
+  SpeechAnalyzer (1.82% WER), Whisper large-v3 (1.82%), and Parakeet v2 (1.69%) are a
+  statistical tie: their 95% confidence intervals all overlap. "Most accurate on-device
+  engine" is true inside the error bars, not as a clean win.
+- **The benchmark's real gap is Parakeet.** NVIDIA Parakeet TDT (which the original did
+  not test) is tied for best on LibriSpeech and clearly best on the fair out-of-domain
+  set (Earnings-22, ~11.2%), so it belongs in any on-device comparison.
+- **Out of domain, Apple is competitive but not ahead.** On Earnings-22 (out-of-domain
+  for every engine, the fairest test), Apple (12.03%) ties on-device WhisperKit (12.35%)
+  but trails both Parakeet (~11.2%) and reference-implementation Whisper (~11.1% on the
+  Open ASR Leaderboard).
+- **Two caveats decide how to read this.** (1) LibriSpeech and AMI are both in
+  Parakeet's training data; only Earnings-22 is out-of-domain for all engines. (2)
+  On-device WhisperKit at default settings hallucinates on short conversational clips
+  (AMI is 38% sub-1s), inflating its AMI WER well above reference Whisper, so we flag the
+  AMI Whisper numbers as a tooling artifact, not Whisper's true error.
 
-```bash
-./.venv/bin/python rescore_published.py
+WER is word error rate, lower is better. Every WER below is corpus WER (total word
+edits / total reference words) with a 95% bootstrap confidence interval (CI) over
+utterances. When two engines' CIs overlap, treat them as tied, not ranked.
+
+## What we found
+
+### LibriSpeech test-clean (2620 utterances, our independent runs)
+
+| Engine | WER% | 95% CI | LibriSpeech in training? |
+|--------|-----:|:------:|--------------------------|
+| Parakeet TDT 0.6b v2 (English)      | 1.69 | 1.54-1.84 | **yes (in-domain)** |
+| Apple SpeechAnalyzer                | 1.82 | 1.66-1.99 | undisclosed |
+| Whisper large-v3                    | 1.82 | 1.67-1.98 | zero-shot |
+| Whisper large-v3-turbo              | 1.93 | 1.77-2.09 | zero-shot |
+| Parakeet TDT 0.6b v3 (multilingual) | 2.15 | 1.92-2.40 | **yes (in-domain)** |
+| Whisper medium                      | 2.55 | 2.36-2.76 | zero-shot |
+| Whisper small                       | 3.32 | 3.09-3.56 | zero-shot |
+| Whisper base                        | 5.01 | 4.75-5.29 | zero-shot |
+| Whisper tiny                        | 7.47 | 7.12-7.81 | zero-shot |
+
+The top four (Parakeet v2, Apple, Whisper large-v3, turbo) sit inside one another's
+confidence intervals. On this set they are a four-way tie, not a ranking.
+
+### Out of domain: does the ranking hold?
+
+Two harder sets from the Open ASR Leaderboard bundle, run end to end with the same
+normalizer and corpus WER. **Earnings-22 is out-of-domain for every engine (the fair
+test). AMI is in Parakeet's training set**, so Parakeet has home-field there.
+
+| Engine | LibriSpeech | Earnings-22 (fair, OOD for all) | AMI (Parakeet in-domain) |
+|--------|------------:|:-------------------------------:|:------------------------:|
+| Parakeet v2            | 1.69 | 11.23 (10.73-11.73) | 11.58 (11.23-11.93) |
+| Parakeet v3            | 2.15 | 11.20 (10.71-11.74) | 11.43 (11.08-11.79) |
+| Apple SpeechAnalyzer   | 1.82 | 12.03 (11.52-12.56) | 14.32 (13.96-14.69) |
+| Whisper large-v3-turbo | 1.93 | 12.35 (11.87-12.86) | 21.68 (21.22-22.15) † |
+| Whisper small          | 3.32 | 14.92 (14.27-15.57) | 22.88 (22.40-23.35) † |
+
+† These AMI Whisper numbers are inflated by a WhisperKit hallucination artifact, not a
+fair reading of Whisper. See "The AMI Whisper numbers" below; the reference-implementation
+figures are ~15.2 (turbo) and ~13.6 (large-v3).
+
+Reading it:
+
+- **On Earnings-22, the fair set, Parakeet is clearly best** (11.2%, CI below Apple's
+  lower bound). **Apple (12.03%) ties on-device WhisperKit (12.35%)** by overlapping CI,
+  but the reference Whisper implementation on the Open ASR Leaderboard scores ~11.1%
+  (turbo), so Apple trails reference Whisper and Parakeet. Apple is a strong on-device
+  engine here, not the most accurate one.
+- **On AMI, Parakeet leads** (~11.5% vs Apple's 14.3%), but AMI is in Parakeet's training
+  set, so part of that gap is domain overlap, not pure skill. Ignore the raw AMI Whisper
+  cells (see below).
+- **Parakeet leads even on Earnings-22, where it has no home-field**, so its advantage is
+  real and not only contamination. That is the finding the original benchmark missed by
+  not testing it.
+
+### The AMI Whisper numbers (a WhisperKit artifact, not Whisper's error)
+
+Our raw AMI WER for Whisper (21.7% turbo, 22.9% small) is far worse than the Open ASR
+Leaderboard's reference-implementation Whisper (~15.2% turbo, ~13.6% large-v3), and we do
+not treat it as Whisper's true AMI error. AMI is heavily segmented (median clip 1.52s,
+38% under 1s), and WhisperKit CoreML at default settings hallucinates on short clips:
+it transcribes the words correctly and then invents extra text. One example:
+
+```
+reference:  Say nice machine, it goes
+WhisperKit: It's a nice machine that goes in. Yeah. I spent too much time. All right.
+Apple:      It's a nice machine that goes.
 ```
 
-This verifies their **scoring** is honest. It does not prove the transcripts are
-genuine engine output, because you are trusting their `hypothesis` text. For that
-you have to run the audio yourself, which is step 2.
+Reference Whisper suppresses this with temperature-fallback and compression-ratio /
+log-probability thresholds; WhisperKit's CLI does not apply them the same way, and Apple
+and Parakeet simply do not hallucinate on these clips. So the AMI Whisper gap measures a
+tooling behavior on short segments, not the model's accuracy. We report our numbers for
+transparency but cite the leaderboard figures as the fair Whisper-on-AMI reading. The same
+effect exists on Earnings-22 but is small there (longer clips): our WhisperKit turbo 12.35
+vs the leaderboard's 11.07.
 
-**2. Independently run Whisper on the real audio (WhisperKit, the engine they used).**
-This trusts no one's transcripts. It runs Whisper on the actual LibriSpeech audio
-through WhisperKit CoreML, then scores against LibriSpeech's own references.
+### Training-data overlap (read before ranking)
 
-```bash
-./setup.sh                       # venv, LibriSpeech test-clean, WhisperKit CLI
-./.venv/bin/python run_whisperkit.py tiny base small large-v3-v20240930 medium large-v3
-```
+LibriSpeech is not cleanly held out across these models, so LibriSpeech-only rankings
+are not apples-to-apples:
 
-**3. Extend to Parakeet, the engine the original left out.**
-NVIDIA Parakeet TDT was the most-requested missing model in the discussion of the
-original benchmark. Same corpus, normalizer, and metric, on-device via MLX:
+- **Parakeet v2 and v3: trained on LibriSpeech and AMI.** NVIDIA's cards list
+  LibriSpeech (960 hours) and AMI in the training mix (v2 via the Granary human-labeled
+  set, v3 via NeMo ASR Set 3.0). So LibriSpeech and AMI are in-distribution for
+  Parakeet; Earnings-22 is not listed and is out-of-domain for it.
+- **Whisper: zero-shot on all three.** OpenAI reports LibriSpeech as zero-shot with
+  transcript-level dedup, and AMI/Earnings-22 are not in its training either. (680k h of
+  web audio means perfect exclusion is unverifiable, but this is OpenAI's stated
+  diligence.)
+- **Apple SpeechAnalyzer: undisclosed.** Apple publishes nothing about training data,
+  so whether LibriSpeech or AMI was seen is unknown.
 
-```bash
-./.venv/bin/python run_parakeet.py v2 v3
-```
+Net: LibriSpeech and AMI favor the LibriSpeech/AMI-trained models (Parakeet).
+Earnings-22 is the only set here that is out-of-domain for all three families, so it is
+the fairest read of general capability.
 
-**4. Independently run Apple SpeechAnalyzer on the real audio (macOS 26+).**
-Inscribe only published LibriSpeech transcripts, so to check Apple's number
-end-to-end you have to run the engine yourself. `SpeechAnalyzerCLI/` is a small
-Swift harness (macOS 26 Speech framework, fully on-device) that does exactly that:
+## Cross-checks against published numbers
 
-```bash
-(cd SpeechAnalyzerCLI && swift build -c release)
-./.venv/bin/python run_apple.py
-```
+Our self-measured numbers line up with independently published figures, which is the
+main check that the harness and scoring are sound.
 
-Our run scores **1.82%** on test-clean, matching our re-score of Inscribe's
-published transcripts (1.83%) to 0.01pp, which confirms their Apple transcripts
-were genuine, not just their scoring.
+| Engine / set | This repo | Published | Source |
+|--------------|----------:|----------:|--------|
+| Parakeet v2, LibriSpeech clean | 1.69 | 1.69 | NVIDIA model card |
+| Parakeet v2, Earnings-22       | 11.23 | 11.15 | NVIDIA model card |
+| Parakeet v2, AMI               | 11.58 | 11.16 | NVIDIA model card |
+| Parakeet v3, Earnings-22       | 11.20 | 11.42 | NVIDIA model card |
 
-**5. Test out-of-domain, where LibriSpeech contamination can't flatter anyone.**
-Sample a harder set from the Open ASR Leaderboard bundle and run every engine:
+Parakeet v2 on LibriSpeech reproduces NVIDIA's card to the hundredth (1.69 vs 1.69),
+and Earnings-22 lands within the confidence interval (11.23 vs 11.15). AMI runs a bit
+higher than the card (11.58 vs 11.16); the card's AMI figure uses the leaderboard's
+"cleaned" reference variant, ours uses the bundle's standard references, which is the
+expected direction for that difference.
 
-```bash
-./.venv/bin/python prep_ood_dataset.py earnings22 test-00002-of-00005.parquet 300
-./.venv/bin/python run_ood_engines.py earnings22
-```
+Whisper is run here through **WhisperKit CoreML** (the on-device path Inscribe used),
+not the reference PyTorch implementation the Open ASR Leaderboard scores, so absolute
+Whisper numbers differ from the leaderboard's by implementation and quantization. For
+context, the leaderboard reports Whisper large-v3-turbo at 11.07 (Earnings-22) and
+13.87 cleaned / 15.16 original (AMI); large-v3 at 11.59 and 13.63 / 14.86.
 
-This is what shows Apple's LibriSpeech lead does not generalize (see results below).
+## Verifying our Whisper harness
 
-## Methodology (kept identical to the original where possible)
+Our small-model WhisperKit numbers land on OpenAI's published zero-shot LibriSpeech
+figures, which validates the harness end to end:
 
-- **Corpus:** LibriSpeech `test-clean` (2620 utterances). Public, from OpenSLR.
-- **Metric:** corpus WER (total word edits / total reference words), not the mean
-  of per-utterance WERs. Empty output scores as 100% WER for that utterance.
-- **Engine:** WhisperKit CoreML, same as the original. `mlx-whisper` is available
-  as a cross-implementation check (`run_mlx.py`); its numbers differ, which is the
-  point.
-- **Normalizer:** OpenAI's own `EnglishTextNormalizer`. We use it because OpenAI
-  published Whisper's LibriSpeech WER with it, which makes our numbers directly
-  comparable to OpenAI's. **Inscribe's normalizer is slightly stricter than this**
-  (they say so), which is why their absolute numbers run ~0.3pp higher than both
-  ours and OpenAI's. A normalizer applies equally to every engine, so it shifts
-  all absolute numbers together and leaves the ranking unchanged.
-- **Decoding:** `--language en`, greedy, no VAD chunking (LibriSpeech utterances
-  are short, so chunking would only trim them).
+| Model | This repo | OpenAI published |
+|-------|----------:|-----------------:|
+| Whisper tiny  | 7.47 | 7.6 |
+| Whisper base  | 5.01 | 5.0 |
+| Whisper small | 3.32 | 3.4 |
 
-## Results
+## Re-scoring Inscribe's published transcripts
 
-WER is word error rate (lower better). RTF is real-time factor = compute time /
-audio duration (lower faster; 0.02 means ~50x real time). RTF is hardware- and
-concurrency-dependent, so treat it as directional, not a cross-machine ranking.
-Inscribe themselves flagged their RTF as provisional.
-
-### All engines, test-clean (our independent runs)
-
-RTF is single-stream (concurrency 1). The last column is the crucial caveat, see
-"Test-set contamination" below.
-
-| Engine | WER% | RTF | LibriSpeech in training? |
-|--------|-----:|----:|--------------------------|
-| Parakeet TDT 0.6b v2 (English) | 1.71 | 0.025 | **yes (in-domain)** |
-| Apple SpeechAnalyzer            | 1.82 | 0.019 | undisclosed |
-| Whisper large-v3-turbo          | 1.92 | 0.064 | held out (zero-shot) |
-| Parakeet TDT 0.6b v3 (multilingual) | 2.03 | 0.019 | **yes (in-domain)** |
-| Whisper Small                   | 3.33 | 0.040 | held out (zero-shot) |
-| Whisper Base                    | 5.01 | 0.017 | held out (zero-shot) |
-| Whisper Tiny                    | 7.45 | 0.014 | held out (zero-shot) |
-
-Parakeet v2 posts the lowest WER, but read that against the last column before
-concluding it is "the best on-device engine": see below.
-
-### Test-set contamination / domain overlap (read this before ranking)
-
-LibriSpeech is **not** cleanly held out across these models, so the comparison is
-not apples-to-apples:
-
-- **Parakeet (v2, v3): trained on LibriSpeech.** NVIDIA's model card lists
-  "LibriSpeech (960 hours)" in the training mix. The test-clean *utterances* are a
-  held-out, speaker-disjoint split, but the **domain is in-distribution** (same
-  LibriVox audiobook read-speech). NVIDIA's own card reports LibriSpeech-clean at
-  1.69% (we got 1.71%) while reporting 9-11% on AMI/Earnings/GigaSpeech: their own
-  numbers show LibriSpeech is their easiest, most in-domain set.
-- **Whisper: OpenAI reports LibriSpeech as zero-shot** and did transcript-level
-  dedup. So Whisper's numbers are out-of-distribution here. (680k h of web audio
-  means perfect exclusion is unverifiable, but this is OpenAI's stated diligence.)
-- **Apple SpeechAnalyzer: undisclosed.** Apple publishes nothing about training
-  data, so we cannot say whether LibriSpeech/LibriVox was seen.
-
-Net: LibriSpeech test-clean favors LibriSpeech-trained models (Parakeet), so part
-of Parakeet's lead measures training overlap, not pure capability. A fair ranking
-needs an out-of-domain set none of them trained on (e.g. Earnings-22, TED-LIUM
-held-out). The same caveat applies to the original benchmark's Apple-beats-Whisper
-claim if Apple trained on LibriSpeech.
-
-### Out-of-domain: does the ranking hold? (the actual test)
-
-We ran the same engines on two harder sets from the Open ASR Leaderboard bundle
-(300-segment evenly-spaced samples, same normalizer and corpus-WER). Earnings-22
-is out-of-domain for all three families (the fair test); AMI is a meeting corpus
-that is *in* Parakeet's training set. Reproduce with `prep_ood_dataset.py` +
-`run_ood_engines.py`.
-
-| Engine | LibriSpeech | Earnings-22 (OOD, fair) | AMI (Parakeet in-domain) |
-|--------|------------:|------------------------:|-------------------------:|
-| Parakeet v2 | 1.71 | **9.83** | 21.42 |
-| Parakeet v3 | 2.03 | 10.35 | **20.90** |
-| Apple SpeechAnalyzer | 1.82 | 11.63 | 22.70 |
-| Whisper large-v3-turbo | 1.92 | 10.68 | 24.64 |
-| Whisper Small | 3.33 | 14.70 | 25.32 |
-
-What changes off LibriSpeech:
-
-- **Apple SpeechAnalyzer's lead does not generalize.** It is 2nd on LibriSpeech but
-  drops to 4th on the fair out-of-domain set (Earnings-22), beaten by Whisper
-  large-v3-turbo and both Parakeet models. So the original benchmark's headline
-  ("most accurate on-device engine we tested") is a LibriSpeech-specific result.
-- **Parakeet leads even on out-of-domain Earnings-22** (9.83%), where it has no
-  obvious home-field, so it looks genuinely strong, not merely LibriSpeech-inflated.
-  NVIDIA's own card reports Earnings ~11%, consistent with our sample.
-- **Whisper large-v3-turbo is the most consistent zero-shot model** (never worse
-  than mid-pack), the fairest read of general capability since it held out all
-  three sets.
-
-Caveat: these are 300-segment directional samples, not full test sets, and the
-per-engine in-domain/zero-shot asymmetry still applies (LibriSpeech and AMI are in
-Parakeet's training; Whisper is zero-shot throughout; Apple is undisclosed).
-
-### Whisper column verification (why we trust the harness)
-
-Our WhisperKit + OpenAI-normalizer numbers land on OpenAI's published zero-shot
-figures; Inscribe sits ~0.4 above both, consistent with their stricter normalizer:
-
-| Model | This repo | Inscribe | OpenAI published |
-|-------|----------:|---------:|-----------------:|
-| Whisper Tiny  | 7.45% | 7.88% | 7.6% |
-| Whisper Base  | 5.01% | 5.42% | 5.0% |
-| Whisper Small | 3.33% | 3.74% | 3.4% |
-
-Whisper large-v3-turbo (full) added at 1.92%. The quantized turbo variant
-(632MB palettized) did not run cleanly through the WhisperKit CLI via
-`--model-path` (it stalled on load), so it is omitted rather than reported.
-
-### Re-score of Inscribe's published Apple transcripts (test-clean / test-other)
-
-Recomputing WER from their released transcripts with OpenAI's normalizer:
+Inscribe released every per-utterance transcript for both Apple engines. Recomputing
+WER from those with OpenAI's normalizer (no audio needed, `rescore_published.py`):
 
 | Engine | Split | This repo | Inscribe | Delta |
 |--------|-------|----------:|---------:|------:|
-| Apple SpeechAnalyzer | test-clean | 1.83% | 2.12% | -0.29 |
-| Apple SpeechAnalyzer | test-other | 4.24% | 4.56% | -0.32 |
-| SFSpeechRecognizer (legacy) | test-clean | 8.65% | 9.02% | -0.37 |
-| SFSpeechRecognizer (legacy) | test-other | 15.80% | 16.25% | -0.45 |
+| Apple SpeechAnalyzer         | test-clean | 1.83 | 2.12 | -0.29 |
+| Apple SpeechAnalyzer         | test-other | 4.24 | 4.56 | -0.32 |
+| SFSpeechRecognizer (legacy)  | test-clean | 8.65 | 9.02 | -0.37 |
+| SFSpeechRecognizer (legacy)  | test-other | 15.80 | 16.25 | -0.45 |
 
-The consistent negative delta is the normalizer difference, not a scoring error:
-with a hand-matched stricter normalizer these land on Inscribe's numbers to within
-0.06pp, and we independently reproduce their footnote (exactly 1 empty hypothesis
-in legacy test-other).
+The consistent negative delta is the normalizer, not a scoring error: Inscribe's
+normalizer is slightly stricter than OpenAI's stock one (they disclose this), so every
+engine shifts by a similar amount (0.29-0.45pp) and the ranking is unchanged. Our own
+independent Apple run (1.82% on test-clean above) matches this re-score of their
+published transcripts (1.83%), which is strong evidence their Apple transcripts are
+genuine engine output, not just honest scoring.
+
+## Environment
+
+- Apple M4 Pro, 64 GB RAM, macOS 26.5.1 (build 25F80).
+- Xcode 26.6 / Swift 6.3.3 (for the WhisperKit CLI and the SpeechAnalyzer harness).
+- WhisperKit pinned to v0.18.0; `parakeet-mlx` 0.5.2; `openai-whisper` 20250625 (used
+  only for its `EnglishTextNormalizer`); `huggingface_hub` 1.23.0.
+- Apple's speech assets are server-provided and cannot be version-pinned, so the Apple
+  numbers are tied to whatever asset shipped as of 2026-07-15 and may drift.
+- Runs dated 2026-07-15.
+
+## What you can reproduce
+
+```bash
+./setup.sh                              # venv, LibriSpeech test-clean, WhisperKit CLI (pinned)
+
+# 1. Re-score Inscribe's published Apple transcripts (no audio, ~1 min)
+./.venv/bin/python rescore_published.py
+
+# 2. Independently run Whisper on the real audio (WhisperKit CoreML)
+./.venv/bin/python run_whisperkit.py tiny base small large-v3-v20240930 large-v3
+
+# 3. Parakeet, the engine the original left out (on-device via MLX)
+./.venv/bin/python run_parakeet.py v2 v3
+
+# 4. Apple SpeechAnalyzer on the real audio (macOS 26+, builds a small Swift harness)
+(cd SpeechAnalyzerCLI && swift build -c release)
+./.venv/bin/python run_apple.py
+
+# 5. Out of domain: full test sets, every engine, then score with CIs
+export HF_TOKEN=...                     # optional, for faster Hugging Face downloads
+./.venv/bin/python prep_ood_dataset.py earnings22
+./.venv/bin/python run_ood_engines.py earnings22
+./.venv/bin/python score_ood.py earnings22
+
+# AMI is the same, but the WhisperKit CLI segfaults on the full folder, so run its
+# Whisper models in chunks; Apple and Parakeet go through run_ood_engines as usual.
+./.venv/bin/python prep_ood_dataset.py ami
+./.venv/bin/python run_ood_engines.py ami apple parakeet-v2 parakeet-v3
+./.venv/bin/python chunk_whisper_ami.py whisper-small
+./.venv/bin/python chunk_whisper_ami.py whisper-large-v3-v20240930
+./.venv/bin/python score_ood.py ami
+```
+
+Step 2 accepts `medium` too. `run_mlx.py` is an optional cross-implementation check of
+Whisper via `mlx-whisper`.
+
+## Methodology
+
+- **Corpus:** LibriSpeech `test-clean` (2620 utterances, OpenSLR). Out-of-domain sets
+  are the full Earnings-22 and AMI test splits from the Open ASR Leaderboard bundle
+  `hf-audio/esb-datasets-test-only-sorted`.
+- **Metric:** corpus WER (total edits / total reference words), not the mean of
+  per-utterance WERs. Empty output scores as 100% for that utterance. Each number
+  carries a 95% bootstrap CI over utterances (1000 resamples, fixed seed).
+- **Engine:** WhisperKit CoreML for Whisper, same on-device path as the original.
+  Parakeet via `parakeet-mlx`. Apple SpeechAnalyzer via `SpeechAnalyzerCLI/` (macOS 26
+  Speech framework, fully on-device).
+- **Normalizer:** OpenAI's `EnglishTextNormalizer`, applied to every engine equally, so
+  it shifts all absolute numbers together and leaves rankings unchanged. We use it
+  because OpenAI published Whisper's LibriSpeech WER with it.
+- **Decoding:** `--language en`, greedy, no VAD chunking (utterances are short clips).
+- **AMI note:** the WhisperKit CLI segfaults on the full 12k-file AMI folder (a scale
+  limit in the tool; Apple and Parakeet process the same folder fine), so AMI Whisper is
+  run in chunks of 1500 via `chunk_whisper_ami.py`. Separately, we drop 101 clips shorter
+  than 0.15s (backchannels like "Yeah.", single letters; 105 reference words, 0.117% of
+  the total) for every engine so all engines are scored on the identical set.
+- **Speed:** Apple and Parakeet run single-stream at roughly 0.02 real-time factor
+  (about 50x faster than audio) on the M4 Pro. WhisperKit was run at the CLI's default
+  concurrency, so its per-file timing is not a clean single-stream figure; we do not
+  rank on speed, and neither should you across machines.
 
 ## Requirements
 
-- macOS on Apple Silicon (for WhisperKit CoreML and Parakeet MLX).
-  `rescore_published.py` runs anywhere with Python.
+- macOS on Apple Silicon (WhisperKit CoreML, Parakeet MLX). `rescore_published.py` runs
+  anywhere with Python.
 - **macOS 26+** for `run_apple.py` (the SpeechAnalyzer API is macOS 26 only).
-- Xcode / Swift toolchain (for the WhisperKit CLI and the SpeechAnalyzer harness).
-- Python 3.10+.
-- ~1 GB disk for LibriSpeech test-clean plus the CoreML models.
+- Xcode / Swift toolchain.
+- Python 3.10+. Note `openai-whisper` pulls in torch (~2 GB); it is used only for the
+  text normalizer.
+- ~4 GB disk for LibriSpeech plus the CoreML models, more if you cache the OOD audio.
 
 ## Credits
 
@@ -213,5 +271,6 @@ in legacy test-other).
 - [WhisperKit](https://github.com/argmaxinc/WhisperKit) by Argmax.
 - [Whisper](https://github.com/openai/whisper) and its English normalizer by OpenAI.
 - [Parakeet](https://huggingface.co/nvidia) by NVIDIA, run via [parakeet-mlx](https://github.com/senstella/parakeet-mlx).
+- Out-of-domain sets from the [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) ESB bundle.
 
-MIT licensed. Not affiliated with Inscribe, Apple, Argmax, or OpenAI.
+MIT licensed. Not affiliated with Inscribe, Apple, Argmax, NVIDIA, or OpenAI.
