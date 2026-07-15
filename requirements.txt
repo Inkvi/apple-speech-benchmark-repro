@@ -1,0 +1,7 @@
+# OpenAI's whisper package is used ONLY for its EnglishTextNormalizer, so our
+# WER is scored the same way OpenAI scored its published LibriSpeech numbers.
+openai-whisper>=20231117
+
+# Optional: cross-implementation reproduction via Apple MLX (run_mlx.py).
+# Comment out if you only run rescore_published.py / run_whisperkit.py.
+mlx-whisper>=0.4.0
