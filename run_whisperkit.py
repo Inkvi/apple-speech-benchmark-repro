@@ -58,29 +58,36 @@ def run(model: str, refs: dict[str, str]):
         return
 
     missing = 0
+    pairs = []
+    compute_s = audio_s = 0.0  # summed over utterances: concurrency-independent
+    for uid, ref in refs.items():
+        rf = os.path.join(report_dir, f"{uid}.json")
+        if os.path.exists(rf):
+            rep = json.load(open(rf))
+            pairs.append((ref, rep.get("text", "")))
+            t = rep.get("timings", {})
+            compute_s += t.get("fullPipeline", 0.0)
+            audio_s += t.get("inputAudioSeconds", 0.0)
+        else:
+            pairs.append((ref, ""))
+            missing += 1
 
-    def pairs():
-        nonlocal missing
-        for uid, ref in refs.items():
-            rf = os.path.join(report_dir, f"{uid}.json")
-            if os.path.exists(rf):
-                hyp = json.load(open(rf)).get("text", "")
-            else:
-                hyp = ""
-                missing += 1
-            yield ref, hyp
-
-    wer, errors, ref_words = corpus_wer(pairs())
+    wer, errors, ref_words = corpus_wer(pairs)
+    rtf = round(compute_s / audio_s, 4) if audio_s else None
     result = {
         "engine": model, "split": "test-clean", "werPercent": round(wer, 2),
         "utterances": len(refs), "missingReports": missing,
-        "computeSeconds": round(time.time() - t0),
+        # speed: sum of per-utterance pipeline time / sum of audio seconds.
+        # Concurrency-independent (each utterance's own compute), so it is
+        # comparable to Inscribe's realTimeFactor. Lower is faster.
+        "audioSeconds": round(audio_s), "computeSeconds": round(compute_s),
+        "realTimeFactor": rtf, "wallSeconds": round(time.time() - t0),
     }
     allr = json.load(open(RESULTS)) if os.path.exists(RESULTS) else []
     allr = [x for x in allr if x["engine"] != model] + [result]
     json.dump(allr, open(RESULTS, "w"), indent=2)
-    print(f"DONE {model}: WER {result['werPercent']}%  missing={missing}  "
-          f"{result['computeSeconds']}s", flush=True)
+    print(f"DONE {model}: WER {result['werPercent']}%  RTF {rtf}  "
+          f"missing={missing}  wall={result['wallSeconds']}s", flush=True)
 
 
 def main():

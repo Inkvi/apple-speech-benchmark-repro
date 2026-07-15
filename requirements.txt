@@ -5,3 +5,8 @@ openai-whisper>=20231117
 # Optional: cross-implementation reproduction via Apple MLX (run_mlx.py).
 # Comment out if you only run rescore_published.py / run_whisperkit.py.
 mlx-whisper>=0.4.0
+
+# Optional: NVIDIA Parakeet TDT on-device via MLX (run_parakeet.py).
+# soundfile is used to sum audio duration for the RTF calculation.
+parakeet-mlx>=0.3.0
+soundfile>=0.12
