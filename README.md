@@ -58,6 +58,16 @@ Our run scores **1.82%** on test-clean, matching our re-score of Inscribe's
 published transcripts (1.83%) to 0.01pp, which confirms their Apple transcripts
 were genuine, not just their scoring.
 
+**5. Test out-of-domain, where LibriSpeech contamination can't flatter anyone.**
+Sample a harder set from the Open ASR Leaderboard bundle and run every engine:
+
+```bash
+./.venv/bin/python prep_ood_dataset.py earnings22 test-00002-of-00005.parquet 300
+./.venv/bin/python run_ood_engines.py earnings22
+```
+
+This is what shows Apple's LibriSpeech lead does not generalize (see results below).
+
 ## Methodology (kept identical to the original where possible)
 
 - **Corpus:** LibriSpeech `test-clean` (2620 utterances). Public, from OpenSLR.
@@ -122,6 +132,39 @@ of Parakeet's lead measures training overlap, not pure capability. A fair rankin
 needs an out-of-domain set none of them trained on (e.g. Earnings-22, TED-LIUM
 held-out). The same caveat applies to the original benchmark's Apple-beats-Whisper
 claim if Apple trained on LibriSpeech.
+
+### Out-of-domain: does the ranking hold? (the actual test)
+
+We ran the same engines on two harder sets from the Open ASR Leaderboard bundle
+(300-segment evenly-spaced samples, same normalizer and corpus-WER). Earnings-22
+is out-of-domain for all three families (the fair test); AMI is a meeting corpus
+that is *in* Parakeet's training set. Reproduce with `prep_ood_dataset.py` +
+`run_ood_engines.py`.
+
+| Engine | LibriSpeech | Earnings-22 (OOD, fair) | AMI (Parakeet in-domain) |
+|--------|------------:|------------------------:|-------------------------:|
+| Parakeet v2 | 1.71 | **9.83** | 21.42 |
+| Parakeet v3 | 2.03 | 10.35 | **20.90** |
+| Apple SpeechAnalyzer | 1.82 | 11.63 | 22.70 |
+| Whisper large-v3-turbo | 1.92 | 10.68 | 24.64 |
+| Whisper Small | 3.33 | 14.70 | 25.32 |
+
+What changes off LibriSpeech:
+
+- **Apple SpeechAnalyzer's lead does not generalize.** It is 2nd on LibriSpeech but
+  drops to 4th on the fair out-of-domain set (Earnings-22), beaten by Whisper
+  large-v3-turbo and both Parakeet models. So the original benchmark's headline
+  ("most accurate on-device engine we tested") is a LibriSpeech-specific result.
+- **Parakeet leads even on out-of-domain Earnings-22** (9.83%), where it has no
+  obvious home-field, so it looks genuinely strong, not merely LibriSpeech-inflated.
+  NVIDIA's own card reports Earnings ~11%, consistent with our sample.
+- **Whisper large-v3-turbo is the most consistent zero-shot model** (never worse
+  than mid-pack), the fairest read of general capability since it held out all
+  three sets.
+
+Caveat: these are 300-segment directional samples, not full test sets, and the
+per-engine in-domain/zero-shot asymmetry still applies (LibriSpeech and AMI are in
+Parakeet's training; Whisper is zero-shot throughout; Apple is undisclosed).
 
 ### Whisper column verification (why we trust the harness)
 

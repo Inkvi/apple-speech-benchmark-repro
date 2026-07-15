@@ -10,3 +10,10 @@ mlx-whisper>=0.4.0
 # soundfile is used to sum audio duration for the RTF calculation.
 parakeet-mlx>=0.3.0
 soundfile>=0.12
+
+# Optional: out-of-domain dataset sampling (prep_ood_dataset.py / run_ood_engines.py).
+# We read the parquet audio bytes directly and decode with soundfile, so no
+# torchcodec / datasets audio-decode stack is required.
+huggingface_hub>=0.24
+pyarrow>=15
+numpy>=1.24
